@@ -1,7 +1,7 @@
 (function(){
   var elif = angular.module('elif', []);
 
-  var CONDITIONALS = 'elif.conditionals';
+  var ELIF_OPTS = 'elif.opts';
     
   // This is copied from AngularJS because it is not
   // part of the public interface.
@@ -31,100 +31,133 @@
   
     return angular.element(elements);
   };
+
+  // Create a watcher that watches a chain of if/else-if/else
+  var createWatcher = function(scope, opts){
+    var conditionalValues = [];
+
+    opts.hasWatcher = true;
+
+    var removeWatcher = scope.$watch(function(){
+      // Watch the boolean conditionals; we only need
+      // to run through the if/else-if/else chain if one
+      // of them changes.  We can also take the chance to
+      // short-circuit when we've found our first true
+      // condition.
+      var i;
+      var len = opts.conditionals.length;
+      conditionalValues.length = len;
+      for(i = 0; i < len; i++){
+        var conditionalVal = opts.conditionals[i].fn();
+
+        // If this chain only contains one-time bindings, stop watching
+        // after we encounter the first non-undefined value
+        if (opts.onetime && typeof conditionalVal !== 'undefined') {
+          removeWatcher();
+        }
+
+        if((conditionalValues[i] = !!conditionalVal)){
+          i++;
+          break;
+        }
+      }
+      for(; i < len; i++){
+        conditionalValues[i] = false;
+      }
+      return conditionalValues;
+    }, function(conditionalValues){
+
+      // Update each block; also find first matching if/else-if.
+      var index = -1;
+      for(var i = 0, len = opts.conditionals.length; i < len; i++){
+        if(conditionalValues[i]){
+          opts.conditionals[i].callback(true);
+          index = i;
+        }
+        else {
+          opts.conditionals[i].callback(false);
+        }
+      }
+
+      // Handle else, if there is one.
+      opts.fallthrough && opts.fallthrough(index === -1);
+
+    }, true); // Deep watch; we know that it is a simple list of booleans.
+  };
   
   elif.factory('elif', [
     function(){
-      // By requiring the scope have it's own copy of `elif.conditionals`
+      // By requiring the scope have it's own copy of `elif.opts`
       // we avoid if/else-if/else structures that span AngularJS scopes.
-      var getConditionals = function(scope){
-        if(angular.hasOwnProperty.call(scope, CONDITIONALS)){
-          var conditionals = scope[CONDITIONALS];
-          return conditionals[conditionals.length - 1];
+      var getOpts = function(scope){
+        if(angular.hasOwnProperty.call(scope, ELIF_OPTS)){
+          var opts = scope[ELIF_OPTS];
+          return opts[opts.length - 1];
         }
       };
       
       return {
         create: function(scope, fn, callback){
-          var conditionals = [{
+          var opts = {
+            fallthrough: null,
+            onetime: null,
+            hasWatcher: false,
+            conditionals: []
+          };
+
+          opts.conditionals.push({
             fn: fn,
             callback: callback || angular.identity
-          }];
-          var conditionalValues = [];
-          
-          scope.$watch(function(){
-            // Watch the boolean conditionals; we only need
-            // to run through the if/else-if/else chain if one
-            // of them changes.  We can also take the chance to
-            // short-circuit when we've found our first true
-            // condition.
-            var i;
-            var len = conditionals.length;
-            conditionalValues.length = len;
-            for(i = 0; i < len; i++){
-              if((conditionalValues[i] = !!conditionals[i].fn())){
-                i++;
-                break;
-              }
-            }
-            for(; i < len; i++){
-              conditionalValues[i] = false;
-            }
-            return conditionalValues;
-          }, function(conditionalValues){
-
-            // Update each block; also find first matching if/else-if.
-            var index = -1;
-            for(var i = 0, len = conditionals.length; i < len; i++){
-              if(conditionalValues[i]){
-                conditionals[i].callback(true);
-                index = i;
-              }
-              else {
-                conditionals[i].callback(false);
-              }
-            }
-
-            // Handle else, if there is one.
-            conditionals.fallthrough && conditionals.fallthrough(index === -1);
-
-          }, true); // Deep watch; we know that it is a simple list of booleans.
+          });
           
           // Keep track of if/else-if/else structures per AngularJS scope.
-          if(!angular.hasOwnProperty.call(scope, CONDITIONALS)){
-            scope[CONDITIONALS] = [];
+          if(!angular.hasOwnProperty.call(scope, ELIF_OPTS)){
+            scope[ELIF_OPTS] = [];
           }
-          scope[CONDITIONALS].push(conditionals);
+          scope[ELIF_OPTS].push(opts);
         },
         extend: function(scope, fn, callback){
-          var conditionals = getConditionals(scope);
-          if(!conditionals){
+          var opts = getOpts(scope);
+          if(!opts){
             throw new Error('elif.extend: no if found at this level');
           }
-          if(conditionals.fallthrough){
+          if(opts.fallthrough){
             throw new Error('elif.extend: else-if after else');
           }
           
-          conditionals.push({
+          opts.conditionals.push({
             fn: fn,
             callback: callback
           });
+
+          if(!opts.hasWatcher) {
+            createWatcher(scope, opts);
+          }
         },
         fallthrough: function(scope, fn, callback){
-          var conditionals = getConditionals(scope);
-          if(!conditionals){
+          var opts = getOpts(scope);
+          if(!opts){
             throw new Error('elif.fallthrough: no if found at this level');
           }
-          if(conditionals.fallthrough){
+          if(opts.fallthrough){
             throw new Error('elif.fallthrough: else already found at this level');
           }
-          conditionals.fallthrough = callback;
+          opts.fallthrough = callback;
+
+          if(!opts.hasWatcher) {
+            createWatcher(scope, opts);
+          }
+        },
+        setOneTime(scope, val) {
+          var opts = getOpts(scope);
+          opts.onetime = opts.onetime === false ? false : val;
         }
       };
     }
   ]);
   
   // This implementation is basically the built-in `ng-if`, hooked into the `elif` service.
-  var elifDirective = function(name, method, getter){
+  var elifDirective = function(name, method, getter, attrName){
     elif.directive(name, [
       '$animate',
       '$document',
@@ -173,6 +206,10 @@
                 }
               }
             });
+
+            if (attrName) {
+              elif.setOneTime(scope, String(attrs[attrName]).startsWith('::'));
+            }
           }
         };
       } 
@@ -206,14 +243,31 @@
         link: function(scope, element, attrs){
           var watchFn = getterFn(scope, element, attrs);
           elif.create(scope, watchFn);
+          elif.setOneTime(scope, String(attrs['ngIf']).startsWith('::'));
+        }
+      }
+    }
+  ]);
+
+  elif.directive('elIf', [
+    '$injector',
+    'elif',
+    function($injector, elif){
+      var getterFn = $injector.invoke(getter('elIf'));
+      return {
+        priority: 600,
+        link: function(scope, element, attrs){
+          var watchFn = getterFn(scope, element, attrs);
+          elif.create(scope, watchFn);
+          elif.setOneTime(scope, String(attrs['elIf']).startsWith('::'));
         }
       }
     }
   ]);
   
   // Else-if and else perform their own transclusions.
-  elifDirective('ngElseIf', 'extend', getter('ngElseIf'));
-  elifDirective('ngElif', 'extend', getter('ngElif'));
+  elifDirective('ngElseIf', 'extend', getter('ngElseIf'), 'ngElseIf');
+  elifDirective('ngElif', 'extend', getter('ngElif'), 'ngElif');
   
   // Else doesn't take an argument.
   elifDirective('ngElse', 'fallthrough');
