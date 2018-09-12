@@ -47,16 +47,23 @@
       var i;
       var len = opts.conditionals.length;
       conditionalValues.length = len;
+      var nonUndefinedValueCount = 0;
       for(i = 0; i < len; i++){
         var conditionalVal = opts.conditionals[i].fn();
 
-        // If this chain only contains one-time bindings, stop watching
-        // after we encounter the first non-undefined value
+        // Count non-undefined values for one-time-bound chains
+        // so we can remove the watcher as soon as possible
         if (opts.onetime && typeof conditionalVal !== 'undefined') {
-          removeWatcher();
+          nonUndefinedValueCount++;
         }
 
         if((conditionalValues[i] = !!conditionalVal)){
+          if (opts.onetime) {
+            // If we find a truthy value in a one-time-bound chain,
+            // we don't need to evaluate the chain anymore
+            removeWatcher();
+          }
+
           i++;
           break;
         }
@@ -64,6 +71,13 @@
       for(; i < len; i++){
         conditionalValues[i] = false;
       }
+
+      if (opts.onetime && nonUndefinedValueCount === len) {
+        // If every value in a one-time-bound chain was defined (non-undefined),
+        // we don't need to evaluate the chain anymore
+        removeWatcher();
+      }
+
       return conditionalValues;
     }, function(conditionalValues){
 
@@ -224,7 +238,7 @@
         return function(scope, element, attrs){
           var testFn = $parse(attrs[name]);
           return function(){
-            return !!testFn(scope);
+            return testFn(scope);
           };
         };
       }
