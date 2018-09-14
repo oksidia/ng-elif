@@ -162,7 +162,7 @@
             createWatcher(scope, opts);
           }
         },
-        setOneTime(scope, val) {
+        setOneTime: function(scope, val) {
           var opts = getOpts(scope);
           opts.onetime = opts.onetime === false ? false : val;
         }
